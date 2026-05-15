@@ -1,0 +1,13 @@
+{
+  "scan_keywords": [
+    "opc-ua", "cnc automation", "python automation",
+    "mcp server", "claude-code", "ci/cd",
+    "docker dev tools", "code quality",
+    "security scan", "vs code productivity",
+    "python testing", "api monitoring",
+    "github actions", "cli tool"
+  ],
+  "min_score": 70,
+  "max_results_per_query": 10,
+  "notion_page_id": "361967ffe82f808dad92c6669ce93a45"
+}
