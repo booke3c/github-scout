@@ -126,6 +126,29 @@ def cmd_scan(write_notion: bool = True) -> None:
         print(format_results(f"本週掃描 {date_label}", all_recommended,
                              all_watch, all_avoid))
         print(f"\n{summary}（--no-notion：未寫入 Notion）")
+
+        def _j(s):
+            return {
+                "name": s.data.name, "url": s.data.url,
+                "desc": (s.data.description or "")[:120],
+                "score": s.total, "security": s.security_score,
+                "integration": s.integration_score, "stars": s.data.stars,
+                "warnings": s.warnings[:3],
+            }
+
+        payload = {
+            "date": date_label,
+            "counts": {
+                "recommended": len(all_recommended),
+                "watch": len(all_watch),
+                "avoid": len(all_avoid),
+            },
+            "recommended": [_j(s) for s in all_recommended[:20]],
+            "watch": [_j(s) for s in all_watch[:20]],
+            "avoid": [_j(s) for s in all_avoid[:20]],
+            "integration_notes": _integration_notes(all_recommended),
+        }
+        print("##SCOUT_JSON##" + json.dumps(payload, ensure_ascii=False))
         return
 
     from src.notion_writer import write_scan_results, NotionWriteError
