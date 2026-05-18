@@ -2,26 +2,32 @@ from .models import RawToolData, ScoredTool
 
 
 def _score_security(t: RawToolData) -> tuple[int, list[str]]:
+    # 0-35 band (matches spec). Baseline-expected signals weighted modestly;
+    # absence of known vulnerabilities weighted heaviest.
     score = 0
-    if t.has_security_md: score += 5
-    if t.has_license: score += 3
-    if t.has_signed_release: score += 3
-    if t.has_lockfile: score += 2
-    if t.cve_count == 0: score += 7
-    if t.dep_vuln_count == 0: score += 5
+    if t.has_license: score += 5
+    if t.has_security_md: score += 6
+    if t.has_signed_release: score += 4
+    if t.has_lockfile: score += 3
+    if t.cve_count == 0: score += 9
+    if t.dep_vuln_count == 0: score += 8
 
     warnings = []
+    # Penalty graded by real severity. curl|bash / write-all / many open
+    # security issues are genuine smells; unpinned actions and `secrets.`
+    # references are near-universal in healthy repos -> informational only.
     danger_flags = [
-        (t.requires_curl_bash, "README requires curl|bash install"),
-        (t.action_unpinned, "GitHub Action not pinned to SHA"),
-        (t.requires_write_all, "workflow requires write-all permissions"),
-        (t.accesses_secrets, "accesses secrets/tokens/SSH keys"),
-        (t.unresolved_security_issues > 5,
+        (t.requires_curl_bash, 12, "README requires curl|bash install"),
+        (t.requires_write_all, 8, "workflow requires write-all permissions"),
+        (t.unresolved_security_issues > 5, 8,
          f"{t.unresolved_security_issues} unresolved security issues"),
+        (t.action_unpinned, 2, "GitHub Action not pinned to SHA (info)"),
+        (t.accesses_secrets, 0,
+         "workflow references secrets (info, common in CI)"),
     ]
-    for flag, msg in danger_flags:
+    for flag, penalty, msg in danger_flags:
         if flag:
-            score = max(0, score - 5)
+            score = max(0, score - penalty)
             warnings.append(msg)
 
     return score, warnings
@@ -66,7 +72,9 @@ def _score_response(t: RawToolData) -> tuple[int, list[str]]:
 
 
 def _categorize(total: int, security: int, integration: int) -> str:
-    if security < 25:
+    # security 0-35: <10 means almost no positive signals or hit by a
+    # severe penalty (curl|bash, write-all, many open security issues).
+    if security < 10:
         return "avoid"
     if integration < 8:
         return "watch"
@@ -91,6 +99,10 @@ def score_tool(t: RawToolData) -> ScoredTool:
         warnings.append(f"資料不足，請人工確認: {', '.join(t.missing_fields)}")
 
     category = _categorize(total, security, integration)
+    # curl|bash piping a remote script straight into a shell is a
+    # categorical supply-chain risk -> hard avoid regardless of other scores.
+    if t.requires_curl_bash:
+        category = "avoid"
     if t.last_commit_days > 365 and category == "recommended":
         category = "watch"
 

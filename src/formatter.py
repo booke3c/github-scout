@@ -16,7 +16,7 @@ def format_results(query: str, recommended: list[ScoredTool],
                    watch: list[ScoredTool], avoid: list[ScoredTool] = None) -> str:
     avoid = avoid or []
     total_found = len(recommended) + len(watch) + len(avoid)
-    lines = [f"\nGitHub Scout 結果：{query}（共 {total_found} 筆，評分 ≥70 顯示前 5）\n"]
+    lines = [f"\nGitHub Scout 結果：{query}（共 {total_found} 筆，評分 >=70 顯示前 5）\n"]
 
     if recommended:
         lines.append("== Top 推薦 ==\n")
@@ -34,7 +34,7 @@ def format_results(query: str, recommended: list[ScoredTool],
                 f"    {t.url}\n"
             )
     else:
-        lines.append("無結果達到推薦門檻（評分 ≥70）。\n")
+        lines.append("無結果達到推薦門檻（評分 >=70）。\n")
 
     if watch:
         lines.append("\n== 觀察名單（整合性不足或分數偏低但有潛力）==\n")

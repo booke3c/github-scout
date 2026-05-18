@@ -1,11 +1,78 @@
+import logging
 import os
+import time
+
 from notion_client import Client
+from notion_client.errors import HTTPResponseError, RequestTimeoutError
 
 from .models import ScoredTool
+
+# Transient HTTP statuses worth retrying (Notion gateway / rate limit).
+_TRANSIENT_STATUS = {429, 500, 502, 503, 504}
+_MAX_ATTEMPTS = 5
+_BACKOFF_BASE = 2.0   # seconds
+_BACKOFF_CAP = 30.0   # seconds
+
+
+class NotionWriteError(Exception):
+    """Raised when a Notion write fails after exhausting retries.
+
+    The caller should fall back to printing results locally so a
+    multi-minute scan is never silently lost.
+    """
 
 
 def _client() -> Client:
     return Client(auth=os.environ["NOTION_TOKEN"])
+
+
+def _retry_after_seconds(err: HTTPResponseError, attempt: int) -> float:
+    """Honor Notion's Retry-After header for 429; otherwise exponential."""
+    headers = getattr(err, "headers", None) or {}
+    ra = headers.get("Retry-After") or headers.get("retry-after")
+    if ra:
+        try:
+            return min(float(ra), _BACKOFF_CAP)
+        except (TypeError, ValueError):
+            pass
+    return min(_BACKOFF_BASE * (2 ** attempt), _BACKOFF_CAP)
+
+
+def _append_with_retry(client: Client, block_id: str, children: list[dict]) -> dict:
+    """blocks.children.append with retry on transient Notion failures."""
+    last_exc: Exception | None = None
+    for attempt in range(_MAX_ATTEMPTS):
+        try:
+            return client.blocks.children.append(block_id=block_id, children=children)
+        except HTTPResponseError as e:
+            last_exc = e
+            status = getattr(e, "status", None)
+            if status not in _TRANSIENT_STATUS or attempt == _MAX_ATTEMPTS - 1:
+                # Non-transient (e.g. 400 bad payload, 401 auth) -> don't retry.
+                if status not in _TRANSIENT_STATUS:
+                    raise NotionWriteError(
+                        f"Notion 回傳非暫時性錯誤 {status}，不重試：{e}"
+                    ) from e
+                break
+            wait = _retry_after_seconds(e, attempt)
+            logging.warning(
+                "Notion append 第 %d/%d 次失敗 (status %s)，%.1fs 後重試",
+                attempt + 1, _MAX_ATTEMPTS, status, wait,
+            )
+            time.sleep(wait)
+        except RequestTimeoutError as e:
+            last_exc = e
+            if attempt == _MAX_ATTEMPTS - 1:
+                break
+            wait = min(_BACKOFF_BASE * (2 ** attempt), _BACKOFF_CAP)
+            logging.warning(
+                "Notion append 第 %d/%d 次逾時，%.1fs 後重試",
+                attempt + 1, _MAX_ATTEMPTS, wait,
+            )
+            time.sleep(wait)
+    raise NotionWriteError(
+        f"Notion 寫入重試 {_MAX_ATTEMPTS} 次後仍失敗：{last_exc}"
+    ) from last_exc
 
 
 def _toggle_block(title: str, children: list[dict]) -> dict:
@@ -47,11 +114,15 @@ def write_scan_results(
     avoid: list[ScoredTool],
     integration_notes: str,
 ) -> None:
+    """Append a dated scan report to the Notion page.
+
+    Raises NotionWriteError if the write cannot be persisted after
+    retries so the caller can fall back to local output.
+    """
     client = _client()
 
-    result = client.blocks.children.append(
-        block_id=page_id,
-        children=[_toggle_block(f"{date_label} 掃描結果", [])],
+    result = _append_with_retry(
+        client, page_id, [_toggle_block(f"{date_label} 掃描結果", [])]
     )
     date_block_id = result["results"][0]["id"]
 
@@ -62,9 +133,10 @@ def write_scan_results(
         for s in avoid[:20]
     ]
 
-    client.blocks.children.append(
-        block_id=date_block_id,
-        children=[
+    _append_with_retry(
+        client,
+        date_block_id,
+        [
             _toggle_block(f"Top 推薦（{len(recommended)} 筆）", rec_bullets),
             _toggle_block(f"觀察名單（{len(watch)} 筆）", watch_bullets),
             _toggle_block(f"不建議安裝（{len(avoid)} 筆）", avoid_bullets),

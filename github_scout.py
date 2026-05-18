@@ -5,6 +5,11 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+if sys.stdout.encoding and sys.stdout.encoding.lower() not in ("utf-8", "utf8"):
+    sys.stdout.reconfigure(encoding="utf-8")
+if sys.stderr.encoding and sys.stderr.encoding.lower() not in ("utf-8", "utf8"):
+    sys.stderr.reconfigure(encoding="utf-8")
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -64,21 +69,26 @@ def cmd_query(query: str, save: bool) -> None:
     print(format_results(query, recommended, watch, avoid))
 
     if save:
-        from src.notion_writer import write_scan_results
+        from src.notion_writer import write_scan_results, NotionWriteError
         date_label = datetime.now().strftime("%Y-%m-%d")
-        write_scan_results(
-            page_id=_CONFIG["notion_page_id"],
-            date_label=f"{date_label} 手動查詢：{query}",
-            recommended=recommended,
-            watch=watch,
-            avoid=avoid,
-            integration_notes=_integration_notes(recommended),
-        )
-        print("\n已寫入 Notion。")
+        try:
+            write_scan_results(
+                page_id=_CONFIG["notion_page_id"],
+                date_label=f"{date_label} 手動查詢：{query}",
+                recommended=recommended,
+                watch=watch,
+                avoid=avoid,
+                integration_notes=_integration_notes(recommended),
+            )
+            print("\n已寫入 Notion。")
+        except NotionWriteError as e:
+            logging.error("Notion write failed (query): %s", e)
+            print(f"\n[警告] 查詢結果未能寫入 Notion：{e}")
+            print("上方終端機結果即為完整查詢輸出，未遺失。")
 
 
-def cmd_scan() -> None:
-    from src.notion_writer import write_scan_results
+def cmd_scan(write_notion: bool = True) -> None:
+    from src.formatter import format_results
 
     keywords = _CONFIG.get("scan_keywords", [])
     all_recommended, all_watch, all_avoid = [], [], []
@@ -105,20 +115,44 @@ def cmd_scan() -> None:
     all_avoid = dedup(all_avoid)
 
     date_label = datetime.now().strftime("%Y-%m-%d")
-    write_scan_results(
-        page_id=_CONFIG["notion_page_id"],
-        date_label=date_label,
-        recommended=all_recommended,
-        watch=all_watch,
-        avoid=all_avoid,
-        integration_notes=_integration_notes(all_recommended),
+    summary = (
+        f"掃描完成。推薦 {len(all_recommended)} 筆，觀察名單 {len(all_watch)} 筆，"
+        f"不建議 {len(all_avoid)} 筆。"
     )
-    print(f"掃描完成。推薦 {len(all_recommended)} 筆，觀察名單 {len(all_watch)} 筆，"
-          f"不建議 {len(all_avoid)} 筆。已寫入 Notion。")
+
+    if not write_notion:
+        # Dry-run / cloud mode: print full results to stdout, never touch
+        # Notion. The caller (e.g. a remote routine) writes via Notion MCP.
+        print(format_results(f"本週掃描 {date_label}", all_recommended,
+                             all_watch, all_avoid))
+        print(f"\n{summary}（--no-notion：未寫入 Notion）")
+        return
+
+    from src.notion_writer import write_scan_results, NotionWriteError
+    try:
+        write_scan_results(
+            page_id=_CONFIG["notion_page_id"],
+            date_label=date_label,
+            recommended=all_recommended,
+            watch=all_watch,
+            avoid=all_avoid,
+            integration_notes=_integration_notes(all_recommended),
+        )
+        print(summary + "已寫入 Notion。")
+    except NotionWriteError as e:
+        # Notion 寫入失敗時，把整批結果印在終端機，避免數分鐘掃描白跑。
+        logging.error("Notion write failed (scan): %s", e)
+        print(format_results(f"本週掃描 {date_label}", all_recommended,
+                             all_watch, all_avoid))
+        print(f"\n{summary}")
+        print(f"[警告] 寫入 Notion 失敗：{e}")
+        print("以上為本地完整結果，未寫入 Notion。請稍後重跑或檢查 Notion 狀態。")
+        sys.exit(2)
 
 
 def main():
     try:
+        no_notion = "--no-notion" in sys.argv
         if "--query" in sys.argv:
             idx = sys.argv.index("--query")
             query_args = []
@@ -128,15 +162,19 @@ def main():
                     save = True
                 elif not a.startswith("--"):
                     query_args.append(a)
+            if no_notion:
+                save = False
             query = " ".join(query_args)
             if not query:
                 print("Usage: python github_scout.py --query <keywords> [--save]")
                 sys.exit(1)
             cmd_query(query, save)
         elif "--scan" in sys.argv:
-            cmd_scan()
+            cmd_scan(write_notion=not no_notion)
         else:
-            print("Usage:\n  python github_scout.py --query <keywords> [--save]\n  python github_scout.py --scan")
+            print("Usage:\n"
+                  "  python github_scout.py --query <keywords> [--save]\n"
+                  "  python github_scout.py --scan [--no-notion]")
             sys.exit(1)
     except KeyboardInterrupt:
         sys.exit(0)
