@@ -88,67 +88,42 @@ def cmd_query(query: str, save: bool) -> None:
 
 
 def cmd_scan(write_notion: bool = True) -> None:
-    from src.formatter import format_results
+    """本機個人化掃描：先盤點你已裝的 → 比對略過 → 推薦只留你還沒有的。"""
+    from src.formatter import format_scan
+    from src.scorer import score_tool
+    from src.inventory import get_installed_inventory, is_installed
+
+    inv = get_installed_inventory()
 
     keywords = _CONFIG.get("scan_keywords", [])
-    all_recommended, all_watch, all_avoid = [], [], []
-
-    for kw in keywords:
-        raw = _fetch_all(kw)
-        rec, watch, avoid = _score_and_split(raw)
-        all_recommended.extend(rec)
-        all_watch.extend(watch)
-        all_avoid.extend(avoid)
-
     seen = set()
+    all_scored = []
+    for kw in keywords:
+        for t in _fetch_all(kw):
+            if t.url in seen:
+                continue
+            seen.add(t.url)
+            all_scored.append(score_tool(t))
 
-    def dedup(lst):
-        result = []
-        for s in lst:
-            if s.data.url not in seen:
-                seen.add(s.data.url)
-                result.append(s)
-        return result
+    # 先依「是否已裝」分流：已裝的略過不推薦
+    installed, fresh = [], []
+    for s in all_scored:
+        (installed if is_installed(s.data.name, inv) else fresh).append(s)
 
-    all_recommended = sorted(dedup(all_recommended), key=lambda s: s.total, reverse=True)
-    all_watch = dedup(all_watch)
-    all_avoid = dedup(all_avoid)
+    recommended = sorted([s for s in fresh if s.category == "recommended"],
+                         key=lambda s: s.total, reverse=True)
+    consider = [s for s in fresh if s.category == "watch"]
+    avoid = [s for s in fresh if s.category == "avoid"]
 
     date_label = datetime.now().strftime("%Y-%m-%d")
-    summary = (
-        f"掃描完成。推薦 {len(all_recommended)} 筆，觀察名單 {len(all_watch)} 筆，"
-        f"不建議 {len(all_avoid)} 筆。"
-    )
+    title = f"GitHub Scout 個人化掃描　{date_label}"
+    report = format_scan(title, inv, installed, recommended, consider, avoid)
+    summary = (f"已裝略過 {len(installed)}　建議裝 {len(recommended)}　"
+               f"可考慮 {len(consider)}　不建議 {len(avoid)}。")
 
     if not write_notion:
-        # Dry-run / cloud mode: print full results to stdout, never touch
-        # Notion. The caller (e.g. a remote routine) writes via Notion MCP.
-        print(format_results(f"本週掃描 {date_label}", all_recommended,
-                             all_watch, all_avoid))
+        print(report)
         print(f"\n{summary}（--no-notion：未寫入 Notion）")
-
-        def _j(s):
-            return {
-                "name": s.data.name, "url": s.data.url,
-                "desc": (s.data.description or "")[:120],
-                "score": s.total, "security": s.security_score,
-                "integration": s.integration_score, "stars": s.data.stars,
-                "warnings": s.warnings[:3],
-            }
-
-        payload = {
-            "date": date_label,
-            "counts": {
-                "recommended": len(all_recommended),
-                "watch": len(all_watch),
-                "avoid": len(all_avoid),
-            },
-            "recommended": [_j(s) for s in all_recommended[:20]],
-            "watch": [_j(s) for s in all_watch[:20]],
-            "avoid": [_j(s) for s in all_avoid[:20]],
-            "integration_notes": _integration_notes(all_recommended),
-        }
-        print("##SCOUT_JSON##" + json.dumps(payload, ensure_ascii=False))
         return
 
     from src.notion_writer import write_scan_results, NotionWriteError
@@ -156,19 +131,19 @@ def cmd_scan(write_notion: bool = True) -> None:
         write_scan_results(
             page_id=_CONFIG["notion_page_id"],
             date_label=date_label,
-            recommended=all_recommended,
-            watch=all_watch,
-            avoid=all_avoid,
-            integration_notes=_integration_notes(all_recommended),
+            recommended=recommended,
+            watch=consider,
+            avoid=avoid,
+            integration_notes=_integration_notes(recommended),
+            installed=installed,
         )
-        print(summary + "已寫入 Notion。")
+        print(report)
+        print(f"\n{summary}已寫入 Notion。")
     except NotionWriteError as e:
         # Notion 寫入失敗時，把整批結果印在終端機，避免數分鐘掃描白跑。
         logging.error("Notion write failed (scan): %s", e)
-        print(format_results(f"本週掃描 {date_label}", all_recommended,
-                             all_watch, all_avoid))
-        print(f"\n{summary}")
-        print(f"[警告] 寫入 Notion 失敗：{e}")
+        print(report)
+        print(f"\n{summary}\n[警告] 寫入 Notion 失敗：{e}")
         print("以上為本地完整結果，未寫入 Notion。請稍後重跑或檢查 Notion 狀態。")
         sys.exit(2)
 

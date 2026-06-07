@@ -96,12 +96,12 @@ def _bullet(text: str) -> dict:
     }
 
 
-def _tool_bullet(s: ScoredTool) -> dict:
+def _tool_bullet(s: ScoredTool, verdict: str = "建議裝") -> dict:
     t = s.data
+    # 功能說明放前面、加長到 110 字，讓「這是什麼、要不要裝」一眼看懂
     text = (
-        f"{t.name}  評分 {s.total}  ── {t.description[:60]}"
-        f"  安全 {s.security_score} 整合 {s.integration_score}"
-        f"  {t.url}"
+        f"【{verdict}】{t.name}　功能：{(t.description or '（無描述）')[:110]}"
+        f"　｜評分 {s.total}／安全 {s.security_score}／Stars {t.stars}　{t.url}"
     )
     return _bullet(text)
 
@@ -113,9 +113,11 @@ def write_scan_results(
     watch: list[ScoredTool],
     avoid: list[ScoredTool],
     integration_notes: str,
+    installed: list[ScoredTool] | None = None,
 ) -> None:
     """Append a dated scan report to the Notion page.
 
+    installed：本次掃到、但你已安裝而略過的工具（顯示出來，證明有做盤點比對）。
     Raises NotionWriteError if the write cannot be persisted after
     retries so the caller can fall back to local output.
     """
@@ -126,20 +128,23 @@ def write_scan_results(
     )
     date_block_id = result["results"][0]["id"]
 
-    rec_bullets = [_tool_bullet(s) for s in recommended[:20]]
-    watch_bullets = [_tool_bullet(s) for s in watch[:20]]
+    rec_bullets = [_tool_bullet(s, "建議裝") for s in recommended[:20]]
+    watch_bullets = [_tool_bullet(s, "可考慮") for s in watch[:20]]
     avoid_bullets = [
-        _bullet(f"{s.data.name}  ── {'，'.join(s.warnings[:2])}")
+        _bullet(f"【不建議】{s.data.name}　── {'，'.join(s.warnings[:2])}")
         for s in avoid[:20]
     ]
 
-    _append_with_retry(
-        client,
-        date_block_id,
-        [
-            _toggle_block(f"Top 推薦（{len(recommended)} 筆）", rec_bullets),
-            _toggle_block(f"觀察名單（{len(watch)} 筆）", watch_bullets),
-            _toggle_block(f"不建議安裝（{len(avoid)} 筆）", avoid_bullets),
-            _toggle_block("Claude Code 整合建議", [_bullet(integration_notes)]),
-        ],
-    )
+    blocks = []
+    if installed:
+        names = "、".join(s.data.name for s in installed[:25])
+        blocks.append(_toggle_block(
+            f"你已經有的·已略過不重複推薦（{len(installed)} 個）", [_bullet(names)]))
+    blocks += [
+        _toggle_block(f"建議裝·你還沒有且符合需求（{len(recommended)} 筆）", rec_bullets),
+        _toggle_block(f"可考慮·有潛力自行斟酌（{len(watch)} 筆）", watch_bullets),
+        _toggle_block(f"不建議·安全或品質疑慮（{len(avoid)} 筆）", avoid_bullets),
+        _toggle_block("Claude Code 整合建議", [_bullet(integration_notes)]),
+    ]
+
+    _append_with_retry(client, date_block_id, blocks)
