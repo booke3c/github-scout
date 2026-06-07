@@ -22,7 +22,7 @@ if sys.stderr.encoding and sys.stderr.encoding.lower() not in ("utf-8", "utf8"):
 from dotenv import load_dotenv
 load_dotenv()
 
-from src.feeds import collect_new, summarize, _save_state, SOURCES
+from src.feeds import collect_new, summarize, overview, _save_state, SOURCES
 
 _ROOT = Path(__file__).resolve().parent
 _CONFIG = _ROOT / "feeds_config.json"
@@ -40,8 +40,20 @@ def _save_cfg(cfg):
     _CONFIG.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def _render_terminal(items, errors):
+def _render_terminal(items, errors, ov=""):
     lines = [f"AI 訊號週報 {datetime.now():%Y-%m-%d}　新增 {len(items)} 則\n"]
+    if ov:
+        lines.append("== 本週重點 ==")
+        lines.append(ov + "\n")
+    high = [it for it in items if it.get("rel") == "高"]
+    lines.append(f"== 高度適合你（{len(high)}）==")
+    if high:
+        for it in high:
+            lines.append(f"  ★ {it.get('zh','')}")
+            lines.append(f"     {it['title'][:60]}  {it['url']}")
+    else:
+        lines.append("  （本週沒有標為『高』的）")
+    lines.append("")
     by_src = {}
     for it in items:
         by_src.setdefault(it["source"], []).append(it)
@@ -60,7 +72,18 @@ def _render_terminal(items, errors):
     return "\n".join(lines)
 
 
-def _write_notion(cfg, items, errors):
+def _para(text, bold=False):
+    return {"object": "block", "type": "paragraph", "paragraph": {"rich_text": [
+        {"type": "text", "text": {"content": text[:1900]},
+         "annotations": {"bold": bold}}]}}
+
+
+def _h3(text):
+    return {"object": "block", "type": "heading_3", "heading_3": {"rich_text": [
+        {"type": "text", "text": {"content": text}}]}}
+
+
+def _write_notion(cfg, items, errors, ov=""):
     from src.notion_writer import _client, _append_with_retry, _toggle_block, _bullet
     client = _client()
     # 首跑建子頁
@@ -83,7 +106,21 @@ def _write_notion(cfg, items, errors):
     by_src = {}
     for it in items:
         by_src.setdefault(it["source"], []).append(it)
+
+    # 本週重點(放在 toggle 最上面):整體摘要 + 高度適合你
     children = []
+    if ov:
+        children.append(_para("本週重點", bold=True))
+        children.append(_para(ov))
+    high = [it for it in items if it.get("rel") == "高"]
+    children.append(_h3(f"高度適合你（{len(high)}）"))
+    if high:
+        for it in high:
+            children.append(_bullet(f"★ {it.get('zh','')}　|　"
+                                    f"{it['title'][:60]}　{it['url']}"))
+    else:
+        children.append(_bullet("本週沒有標為『高』的"))
+
     for src in SOURCES:
         lst = by_src.get(src["name"], [])
         if not lst:
@@ -108,21 +145,22 @@ def main():
     items, errors, state = collect_new()
     items = summarize(items)
     items.sort(key=lambda x: _REL_ORDER.get(x.get("rel", "中"), 1))
+    ov = overview(items)
 
     if no_notion:
-        print(_render_terminal(items, errors))
+        print(_render_terminal(items, errors, ov))
         print(f"\n（--no-notion：未寫 Notion、未更新狀態。新增 {len(items)} 則）")
         return
 
     cfg = _load_cfg()
     if items or errors:
         try:
-            _write_notion(cfg, items, errors)
+            _write_notion(cfg, items, errors, ov)
             _save_state(state)   # 寫成功才更新狀態,避免漏報
             print(f"[OK] 已寫入 Notion，新增 {len(items)} 則。頁：{cfg.get('digest_page_id')}")
         except Exception as e:
             print(f"[警告] 寫入 Notion 失敗：{e}")
-            print(_render_terminal(items, errors))
+            print(_render_terminal(items, errors, ov))
             sys.exit(2)
     else:
         _save_state(state)

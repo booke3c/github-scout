@@ -205,3 +205,30 @@ def summarize(items: list, model: str = "claude-sonnet-4-6") -> list:
             it["rel"] = d.get("rel", "中")
             out.append(it)
     return out
+
+
+def overview(items: list, model: str = "claude-sonnet-4-6") -> str:
+    """本週重點:2-3 句繁中整體摘要(新聞有什麼 + 對 Steve 值得注意的趨勢)。"""
+    if not items:
+        return ""
+    key = _resolve_anthropic_key()
+    if not key:
+        return ""
+    try:
+        import anthropic
+        client = anthropic.Anthropic(api_key=key, timeout=60.0, max_retries=2)
+        listing = "\n".join(
+            f"[{it['source']}][{it.get('rel','中')}] {it.get('zh', it['title'])}"
+            for it in items)
+        prompt = (
+            f"使用者畫像:{_PROFILE}\n\n以下是本週各來源新項(已標相關度)。用繁體中文寫 "
+            f"2-3 句『本週重點』:整體在發生什麼、有沒有值得他特別注意的趨勢或單一大事。"
+            f"精簡、不浮誇、無 emoji、不要逐條複述。\n\n{listing}")
+        msg = client.messages.create(
+            model=model, max_tokens=400,
+            system=[{"type": "text", "text": "你幫 Steve 寫一週 AI 情報的開場重點,精簡犀利、繁中、無 emoji。",
+                     "cache_control": {"type": "ephemeral"}}],
+            messages=[{"role": "user", "content": prompt}])
+        return msg.content[0].text.strip()
+    except Exception:
+        return ""
