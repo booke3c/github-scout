@@ -12,6 +12,8 @@ import os
 import re
 from pathlib import Path
 
+from src.resilient import resilient_create
+
 _ROOT = Path(__file__).resolve().parent.parent
 _STATE_PATH = _ROOT / "feeds_state.json"
 _KEY_FILE = Path(os.environ.get("ANTHROPIC_KEY_FILE",
@@ -188,8 +190,8 @@ def summarize(items: list, model: str = "claude-sonnet-4-6") -> list:
             f"(<=30字)摘要『這在講什麼』,並依畫像標相關度(高/中/低)。\n"
             f"只回 JSON 陣列,每元素 {{\"i\":序號,\"zh\":\"摘要\",\"rel\":\"高/中/低\"}}。\n\n{listing}")
         try:
-            msg = client.messages.create(
-                model=model, max_tokens=1500,
+            msg = resilient_create(
+                client, model=model, max_tokens=1500,
                 system=[{"type": "text", "text": "你幫 Steve 過濾 AI 情報,精簡、不浮誇、繁中、無 emoji。",
                          "cache_control": {"type": "ephemeral"}}],
                 messages=[{"role": "user", "content": prompt}])
@@ -224,8 +226,8 @@ def overview(items: list, model: str = "claude-sonnet-4-6") -> str:
             f"使用者畫像:{_PROFILE}\n\n以下是本週各來源新項(已標相關度)。用繁體中文寫 "
             f"2-3 句『本週重點』:整體在發生什麼、有沒有值得他特別注意的趨勢或單一大事。"
             f"精簡、不浮誇、無 emoji、不要逐條複述。\n\n{listing}")
-        msg = client.messages.create(
-            model=model, max_tokens=400,
+        msg = resilient_create(
+            client, model=model, max_tokens=400,
             system=[{"type": "text", "text": "你幫 Steve 寫一週 AI 情報的開場重點,精簡犀利、繁中、無 emoji。",
                      "cache_control": {"type": "ephemeral"}}],
             messages=[{"role": "user", "content": prompt}])
