@@ -7,7 +7,7 @@
 
 用法(把原本的 client.messages.create(**kw) 換成):
     from src.resilient import resilient_create
-    resp = resilient_create(client, fallback_model="claude-sonnet-4-6", **kw)
+    resp = resilient_create(client, fallback_model="claude-sonnet-5", **kw)
 
 刻意用 duck-typing 判斷可重試(看 status_code / 例外類名 / 'overload' 字樣),
 不綁 anthropic 的例外類別,方便單元測試與跨專案重用。
