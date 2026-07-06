@@ -196,7 +196,7 @@ def summarize(items: list, model: str = "claude-sonnet-5") -> list:
                 system=[{"type": "text", "text": "你幫 Steve 過濾 AI 情報,精簡、不浮誇、繁中、無 emoji。",
                          "cache_control": {"type": "ephemeral"}}],
                 messages=[{"role": "user", "content": prompt}])
-            raw = msg.content[0].text.strip()
+            raw = "".join(b.text for b in msg.content if getattr(b, "type", None) == "text").strip()
             if raw.startswith("```"):
                 raw = raw.split("```", 2)[1].lstrip("json").strip()
             parsed = {d["i"]: d for d in json.loads(raw)}
@@ -233,6 +233,6 @@ def overview(items: list, model: str = "claude-sonnet-5") -> str:
             system=[{"type": "text", "text": "你幫 Steve 寫一週 AI 情報的開場重點,精簡犀利、繁中、無 emoji。",
                      "cache_control": {"type": "ephemeral"}}],
             messages=[{"role": "user", "content": prompt}])
-        return msg.content[0].text.strip()
+        return "".join(b.text for b in msg.content if getattr(b, "type", None) == "text").strip()
     except Exception:
         return ""
