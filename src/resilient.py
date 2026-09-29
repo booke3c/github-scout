@@ -62,6 +62,11 @@ def resilient_create(client, *, fallback_model: str | None = None,
     # 主模型重試用盡:有備援模型且與目前不同 → 換模型再試一次
     if fallback_model and kwargs.get("model") != fallback_model:
         kwargs["model"] = fallback_model
+        # between_tools 只有 claude-sonnet-5-5 收,原樣轉給別的模型會 400;
+        # 備援時拿掉 thinking,讓備援模型用它自己的預設。
+        if ((kwargs.get("thinking") or {}).get("type") == "between_tools"
+                and fallback_model != "claude-sonnet-5-5"):
+            kwargs.pop("thinking")
         try:
             return client.messages.create(**kwargs)
         except Exception:  # noqa: BLE001

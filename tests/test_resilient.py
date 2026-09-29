@@ -62,6 +62,16 @@ def test_fallback_model_after_exhaustion():
     assert c.messages.calls[-1]["model"] == "sonnet"  # 最後一次用備援模型
 
 
+def test_fallback_drops_between_tools_for_other_models():
+    # between_tools 只有 sonnet-5-5 收;備援到別的模型時要拿掉,否則備援本身就 400
+    c = _FakeClient([_Err(529), _Err(529), "FB-OK"])
+    out = resilient_create(c, model="claude-sonnet-5-5", fallback_model="claude-haiku-4-5",
+                           thinking={"type": "between_tools"}, max_retries=1, sleep=_noslip)
+    assert out == "FB-OK"
+    assert c.messages.calls[0]["thinking"] == {"type": "between_tools"}  # 主模型照送
+    assert "thinking" not in c.messages.calls[-1]
+
+
 def test_overload_by_message_text():
     c = _FakeClient([_Err(None, "Overloaded: please retry"), "OK"])
     assert resilient_create(c, model="m", sleep=_noslip) == "OK"

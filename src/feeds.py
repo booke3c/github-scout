@@ -156,13 +156,19 @@ def collect_new():
 
 # ---- LLM：批次摘要 + 相關度 ----
 
+def thinking_off(model: str) -> dict:
+    """關 thinking 的寫法依模型不同:Sonnet 5.5 的 disabled 會 400,要用 between_tools;
+    between_tools 又只有 Sonnet 5.5 收。依模型選,改回舊模型時不必改這裡。"""
+    return {"type": "between_tools"} if model == "claude-sonnet-5-5" else {"type": "disabled"}
+
+
 _PROFILE = """Steve：CNC 製造廠副總，重度 Claude Code 使用者、Python 自動化、跑一批真實
 agent(台股bot、Notion自動化、CNC SCADA、PLC、Family OS);工業自動化 OPC-UA/CNC/SCADA;
 cloud-first;對 agent 成本敏感。高相關=Claude Code/agent/MCP/Python自動化/LLM實務/工業自動化+AI;
 低相關=純前端、遊戲、影片生成、與他無關的研究。"""
 
 
-def summarize(items: list, model: str = "claude-sonnet-5") -> list:
+def summarize(items: list, model: str = "claude-sonnet-5-5") -> list:
     """對每則加 zh(一句繁中摘要) 與 rel(高/中/低)。LLM 失敗則降級為標題。"""
     if not items:
         return items
@@ -192,7 +198,7 @@ def summarize(items: list, model: str = "claude-sonnet-5") -> list:
         try:
             msg = resilient_create(
                 client, model=model, max_tokens=2000,
-                thinking={"type": "disabled"},
+                thinking=thinking_off(model), output_config={"effort": "high"},
                 system=[{"type": "text", "text": "你幫 Steve 過濾 AI 情報,精簡、不浮誇、繁中、無 emoji。",
                          "cache_control": {"type": "ephemeral"}}],
                 messages=[{"role": "user", "content": prompt}])
@@ -210,7 +216,7 @@ def summarize(items: list, model: str = "claude-sonnet-5") -> list:
     return out
 
 
-def overview(items: list, model: str = "claude-sonnet-5") -> str:
+def overview(items: list, model: str = "claude-sonnet-5-5") -> str:
     """本週重點:2-3 句繁中整體摘要(新聞有什麼 + 對 Steve 值得注意的趨勢)。"""
     if not items:
         return ""
@@ -229,7 +235,7 @@ def overview(items: list, model: str = "claude-sonnet-5") -> str:
             f"精簡、不浮誇、無 emoji、不要逐條複述。\n\n{listing}")
         msg = resilient_create(
             client, model=model, max_tokens=560,
-            thinking={"type": "disabled"},
+            thinking=thinking_off(model), output_config={"effort": "high"},
             system=[{"type": "text", "text": "你幫 Steve 寫一週 AI 情報的開場重點,精簡犀利、繁中、無 emoji。",
                      "cache_control": {"type": "ephemeral"}}],
             messages=[{"role": "user", "content": prompt}])
